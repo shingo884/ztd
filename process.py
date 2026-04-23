@@ -164,7 +164,7 @@ def plot_time_space(df: pd.DataFrame):
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR / "time_space_diagram.png", dpi=150)
     plt.show()
-    
+
     fig, ax = plt.subplots(figsize=(6, 8))
 
     det = df[df["detected_flag"] == 1]
@@ -583,14 +583,188 @@ def plot_r1_boundary(R_GRID: np.ndarray):
 
 
 # ════════════════════════════════════════════════════════
+# 11. R値の時空間ヒートマップ（15分 × 100m）
+# ════════════════════════════════════════════════════════
+def plot_r_spatiotemporal(
+    valid: pd.DataFrame,
+    time_bin_min: float = 15.0,   # 時間ビン幅（分）
+    kp_bin_m:     float = 100.0,  # キロポストビン幅（m）
+):
+    """
+    急ブレーキイベントを「発生時刻（15分単位）× 発生位置（100m単位）」で集計し、
+    各セルのR値（平均伝播件数）を2次元ヒートマップで可視化する。
+ 
+    タイムスペース図と同じ軸配置（横=時刻、縦=キロポスト）にして
+    並べて見比べやすくする。
+ 
+    Parameters
+    ----------
+    valid        : calc_r_value() が返す、後続車ありのイベントDF
+    time_bin_min : 時間ビン幅（分）。デフォルト 15分
+    kp_bin_m     : キロポストビン幅（m）。デフォルト 100m
+    """
+    time_bin_sec = time_bin_min * 60
+ 
+    df = valid.copy()
+ 
+    # ── ビン列を作成 ──────────────────────────────────────
+    df["t_bin"]  = (df["brake_t"]  // time_bin_sec).astype(int)
+    df["kp_bin"] = (df["brake_kp"] // kp_bin_m    ).astype(int)
+ 
+    # ── セルごとに集計 ────────────────────────────────────
+    # R値（平均伝播件数）・急ブレーキ件数・伝播率
+    agg = (
+        df.groupby(["t_bin", "kp_bin"])
+        .agg(
+            R_mean      = ("n_infected", "mean"),
+            n_events    = ("n_infected", "count"),
+            n_infected  = ("n_infected", "sum"),
+        )
+        .reset_index()
+    )
+    agg["infect_rate"] = agg["n_infected"] / agg["n_events"]  # 伝播率（0〜1）
+ 
+    # ── ピボット（行=kp_bin、列=t_bin）───────────────────
+    t_vals  = sorted(agg["t_bin"].unique())
+    kp_vals = sorted(agg["kp_bin"].unique())
+ 
+    def to_matrix(value_col: str) -> np.ndarray:
+        pivot = agg.pivot(index="kp_bin", columns="t_bin", values=value_col)
+        pivot = pivot.reindex(index=kp_vals, columns=t_vals)
+        return pivot.values.astype(float)
+ 
+    R_mat     = to_matrix("R_mean")
+    count_mat = to_matrix("n_events")
+    rate_mat  = to_matrix("infect_rate")
+ 
+    # ── 軸ラベル ─────────────────────────────────────────
+    t_labels  = [f"{int(t * time_bin_min)}分" for t in t_vals]
+    kp_labels = [f"{int(k * kp_bin_m)}"       for k in kp_vals]
+ 
+    # ── 描画 ─────────────────────────────────────────────
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(
+        f"R値の時空間分布（時間ビン: {time_bin_min:.0f}分 / キロポストビン: {kp_bin_m:.0f}m）",
+        fontsize=13,
+    )
+ 
+    def draw_heatmap(ax, mat, title, cmap, vmin, vmax, cbar_label, r1_contour=False):
+        """共通ヒートマップ描画ヘルパー"""
+        im = ax.imshow(
+            mat,
+            aspect="auto",
+            origin="lower",
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            interpolation="nearest",
+        )
+        plt.colorbar(im, ax=ax, label=cbar_label, fraction=0.046, pad=0.04)
+ 
+        # R=1 の等高線（R値マップのみ）
+        if r1_contour and not np.all(np.isnan(mat)):
+            try:
+                cs = ax.contour(
+                    mat,
+                    levels=[1.0],
+                    colors=["white"],
+                    linewidths=2.0,
+                    linestyles="--",
+                )
+                ax.clabel(cs, fmt="R=1", fontsize=8, colors="white")
+            except Exception:
+                pass  # データが少なくて等高線が引けない場合はスキップ
+ 
+        # 軸ラベル（間引いて表示）
+        t_step  = max(1, len(t_vals)  // 8)
+        kp_step = max(1, len(kp_vals) // 8)
+        ax.set_xticks(range(0, len(t_vals),  t_step))
+        ax.set_xticklabels([t_labels[i]  for i in range(0, len(t_vals),  t_step)],
+                           rotation=45, fontsize=8)
+        ax.set_yticks(range(0, len(kp_vals), kp_step))
+        ax.set_yticklabels([kp_labels[i] for i in range(0, len(kp_vals), kp_step)],
+                           fontsize=8)
+        ax.set_xlabel("時刻", fontsize=11)
+        ax.set_ylabel("キロポスト (m)", fontsize=11)
+        ax.set_title(title, fontsize=11)
+        ax.grid(False)
+ 
+    # 11-A. R値ヒートマップ（メイン）
+    draw_heatmap(
+        axes[0], R_mat,
+        title="R値（平均伝播件数）\n白破線: R=1 臨界線",
+        cmap="RdYlGn_r",    # 赤=高R（危険）、緑=低R（安全）
+        vmin=0, vmax=2,
+        cbar_label="R 値",
+        r1_contour=True,
+    )
+ 
+    # 11-B. 急ブレーキ件数ヒートマップ
+    draw_heatmap(
+        axes[1], count_mat,
+        title="急ブレーキ発生件数\n（イベント数）",
+        cmap="YlOrRd",
+        vmin=0, vmax=np.nanpercentile(count_mat, 95),  # 外れ値で色が潰れないよう95%ile上限
+        cbar_label="件数",
+    )
+ 
+    # 11-C. 伝播率ヒートマップ（伝播した割合 0〜1）
+    draw_heatmap(
+        axes[2], rate_mat,
+        title="伝播率\n（R>0 イベントの割合）",
+        cmap="RdYlGn_r",
+        vmin=0, vmax=1,
+        cbar_label="伝播率",
+    )
+ 
+    plt.tight_layout()
+    out = OUTPUT_DIR / "r_spatiotemporal.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.show()
+    print(f"時空間R値ヒートマップ保存: {out}")
+ 
+    # ── セル別集計をCSVに保存 ────────────────────────────
+    # 人間が読みやすい時刻・kp列を追加
+    agg["t_label"]  = agg["t_bin"].apply(
+        lambda b: f"{int(b * time_bin_min)}〜{int((b+1) * time_bin_min)}分")
+    agg["kp_label"] = agg["kp_bin"].apply(
+        lambda b: f"{int(b * kp_bin_m)}〜{int((b+1) * kp_bin_m)}m")
+    agg = agg.sort_values(["t_bin", "kp_bin"])
+    out_csv = OUTPUT_DIR / "r_spatiotemporal.csv"
+    agg.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    print(f"時空間集計CSV保存: {out_csv}")
+ 
+    # ── 上位セル（R値が高い危険な時空間）を表示 ────────────
+    top = (
+        agg[agg["n_events"] >= 2]           # 件数が少ないセルは除外
+        .sort_values("R_mean", ascending=False)
+        .head(10)
+    )
+    print(f"\n=== R値上位10セル（危険な時空間） ===")
+    print(top[["t_label", "kp_label", "R_mean", "n_events", "infect_rate"]]
+          .rename(columns={
+              "t_label":     "時間帯",
+              "kp_label":    "区間(kp)",
+              "R_mean":      "R値",
+              "n_events":    "急ブレーキ件数",
+              "infect_rate": "伝播率",
+          })
+          .to_string(index=False))
+ 
+    return agg
+ 
+
+# ════════════════════════════════════════════════════════
 # main
 # ════════════════════════════════════════════════════════
 def main():
     OUTPUT_DIR.mkdir(exist_ok=True)
 
     # 各処理をここで ON/OFF できる
-    df                       = load_and_preprocess()           # 1. 読み込み
-    plot_time_space(df)                                        # 2. タイムスペース図
+    df_ori                       = load_and_preprocess()           # 1. 読み込み
+    df =  df_ori.iloc[:len(df_ori)//20]
+    # plot_time_space(df)                                        # 2. タイムスペース図
+
     detected_only, brake_ev  = detect_brake_events(df)        # 3. 急ブレーキ検出
     results_df               = calc_propagation(              # 4. 伝播判定
                                    detected_only, brake_ev)
@@ -601,7 +775,7 @@ def main():
         save_summary(R, valid, results_df, kp_r)              # 8. サマリー
         R_GRID = scan_r1_boundary(detected_only, brake_ev)    # 9. 境界スキャン
         plot_r1_boundary(R_GRID)                              # 10. 境界可視化
-
+        plot_r_spatiotemporal(valid, time_bin_min=15, kp_bin_m=100)  # 11. 時空間ヒートマップ
 
 if __name__ == "__main__":
     main()
