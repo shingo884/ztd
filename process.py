@@ -154,6 +154,7 @@ def plot_time_space(df: pd.DataFrame):
     ax.set_xlabel("時刻 (s)")
     ax.set_ylabel("キロポスト (m)")
     ax.set_ylim(df["kilopost"].min(), df["kilopost"].max())
+    ax.invert_yaxis()
     ax.set_title("車両軌跡（時間→横）")
     ax.grid(linewidth=0.3, alpha=0.4)
 
@@ -358,68 +359,164 @@ def sensitivity_analysis(detected_only: pd.DataFrame, brake_events: pd.DataFrame
 
 
 # ════════════════════════════════════════════════════════
-# 7. R値可視化（分布・空間・時系列）
+# 7. R値可視化（分布・空間・時系列・時空間ヒートマップ）
 # ════════════════════════════════════════════════════════
-def plot_r_value(R: float, valid: pd.DataFrame):
-    """伝播分布・キロポスト別・時間帯別の3パネル図を出力する。"""
+def plot_r_value(
+    R:            float,
+    valid:        pd.DataFrame,
+    time_bin_min: float = 5.0,   # 時間ビン幅（分）
+    kp_bin_m:     float = 100.0, # キロポストビン幅（m）
+):
+    """伝播分布・空間分布・時系列の3パネル図を出力する。時空間ヒートマップは plot_r_heatmap() を使う。"""
+    valid = valid.copy()
+    time_bin_sec = time_bin_min * 60
+ 
+    # ビン列を事前に作成（複数パネルで共用）
+    valid["kp_bin"]   = (valid["brake_kp"] // kp_bin_m     * kp_bin_m    ).astype(int)
+    valid["t_bin_5m"] = (valid["brake_t"]  // time_bin_sec * time_bin_sec).astype(int)
+ 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     fig.suptitle("交通R値 分析結果", fontsize=13)
-
+ 
     # 7-A. 伝播件数ヒストグラム
     ax = axes[0]
-    ax.hist(valid["n_infected"], bins=range(0, valid["n_infected"].max() + 2),
+    ax.hist(valid["n_infected"],
+            bins=range(0, int(valid["n_infected"].max()) + 2),
             color="#378ADD", edgecolor="white", linewidth=0.5, align="left")
-    ax.axvline(R, color="#D85A30", linewidth=2, linestyle="--", label=f"R = {R:.2f}")
-    ax.axvline(1.0, color="#639922", linewidth=1.5, linestyle=":", label="R = 1 臨界点")
+    ax.axvline(R,   color="#D85A30", linewidth=2,   linestyle="--", label=f"R = {R:.2f}")
+    ax.axvline(1.0, color="#639922", linewidth=1.5, linestyle=":",  label="R = 1 臨界点")
     ax.set_xlabel("1イベントあたりの伝播件数", fontsize=11)
     ax.set_ylabel("急ブレーキイベント数", fontsize=11)
     ax.set_title("伝播件数の分布", fontsize=11)
     ax.legend(fontsize=9)
     ax.grid(axis="y", linewidth=0.3, alpha=0.4)
-
-    # 7-B. キロポスト別R値
+ 
+    # 7-B. キロポスト別R値（棒グラフ）
     ax = axes[1]
-    bin_size = 200
-    valid = valid.copy()
-    valid["kp_bin"] = (valid["brake_kp"] // bin_size * bin_size).astype(int)
     kp_r = valid.groupby("kp_bin")["n_infected"].mean()
-    ax.bar(kp_r.index, kp_r.values, width=bin_size * 0.8,
+    ax.bar(kp_r.index, kp_r.values, width=kp_bin_m * 0.8,
            color=["#D85A30" if v > 1 else "#378ADD" for v in kp_r.values],
            edgecolor="white", linewidth=0.4)
     ax.axhline(1.0, color="#639922", linewidth=1.5, linestyle=":", label="R = 1 臨界点")
     ax.set_xlabel("キロポスト (m)", fontsize=11)
     ax.set_ylabel("区間平均 R 値", fontsize=11)
-    ax.set_title("空間分布（赤=R>1 危険区間）", fontsize=11)
+    ax.set_title(f"空間分布（{kp_bin_m:.0f}m単位）\n赤=R>1 危険区間", fontsize=11)
     ax.legend(fontsize=9)
     ax.grid(axis="y", linewidth=0.3, alpha=0.4)
-
-    # 7-C. 時間帯別R値
+ 
+    # 7-C. 時間帯別R値（折れ線）
     ax = axes[2]
-    t_min, t_max = valid["brake_t"].min(), valid["brake_t"].max()
-    tw = (t_max - t_min) / 6
-    if tw > 0:
-        valid["t_bin"] = ((valid["brake_t"] - t_min) // tw).astype(int)
-        t_r = valid.groupby("t_bin")["n_infected"].mean()
-        ax.plot(t_r.index, t_r.values, marker="o", color="#378ADD",
-                linewidth=1.5, markersize=5)
-        ax.fill_between(t_r.index, t_r.values, alpha=0.15, color="#378ADD")
-        ax.axhline(1.0, color="#639922", linewidth=1.5, linestyle=":", label="R = 1 臨界点")
-        ax.set_xticks(t_r.index)
-        ax.set_xticklabels(
-            [f"{t_min + i * tw:.0f}s" for i in t_r.index], rotation=30, fontsize=8)
-        ax.set_xlabel("時間帯", fontsize=11)
-        ax.set_ylabel("R 値", fontsize=11)
-        ax.set_title("時間的変化", fontsize=11)
-        ax.legend(fontsize=9)
-        ax.grid(linewidth=0.3, alpha=0.4)
-
+    t_r = valid.groupby("t_bin_5m")["n_infected"].mean()
+    ax.plot(t_r.index, t_r.values, marker="o", color="#378ADD",
+            linewidth=1.5, markersize=5)
+    ax.fill_between(t_r.index, t_r.values, alpha=0.15, color="#378ADD")
+    ax.axhline(1.0, color="#639922", linewidth=1.5, linestyle=":", label="R = 1 臨界点")
+    ax.set_xticks(t_r.index)
+    ax.set_xticklabels(
+        [f"{int(t // 60)}分" for t in t_r.index],
+        rotation=45, fontsize=8,
+    )
+    ax.set_xlabel("時間帯", fontsize=11)
+    ax.set_ylabel("R 値", fontsize=11)
+    ax.set_title(f"時間的変化（{time_bin_min:.0f}分単位）", fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(linewidth=0.3, alpha=0.4)
+ 
     plt.tight_layout()
     out = OUTPUT_DIR / "r_value_analysis.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.show()
     print(f"R値分析図保存: {out}")
     return kp_r
-
+ 
+ 
+ 
+# ════════════════════════════════════════════════════════
+# 7-D. 時空間R値ヒートマップ（独立図）
+# ════════════════════════════════════════════════════════
+def plot_r_heatmap(
+    valid:        pd.DataFrame,
+    time_bin_min: float = 5.0,   # 時間ビン幅（分）
+    kp_bin_m:     float = 100.0, # キロポストビン幅（m）
+):
+    """
+    横軸=時間（time_bin_min 分単位）、縦軸=キロポスト（kp_bin_m m単位）で
+    R値を色塗りした時空間ヒートマップを単独の図として出力する。
+    plot_r_value() の3パネル図とは別ファイル（r_heatmap.png）に保存する。
+    """
+    valid = valid.copy()
+    time_bin_sec = time_bin_min * 60
+ 
+    valid["kp_bin"] = (valid["brake_kp"] // kp_bin_m     * kp_bin_m    ).astype(int)
+    valid["t_bin"]  = (valid["brake_t"]  // time_bin_sec * time_bin_sec).astype(int)
+ 
+    all_t  = sorted(valid["t_bin"].unique())
+    all_kp = sorted(valid["kp_bin"].unique())
+ 
+    # pivot: 行=kp_bin（下→上）、列=t_bin（左→右）
+    mat = (
+        valid.groupby(["kp_bin", "t_bin"])["n_infected"]
+        .mean()
+        .unstack(level="t_bin")
+        .reindex(index=all_kp, columns=all_t)
+        .values.astype(float)
+    )
+ 
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.suptitle(
+        f"時空間R値ヒートマップ（{time_bin_min:.0f}分 × {kp_bin_m:.0f}m）",
+        fontsize=13,
+    )
+ 
+    im = ax.imshow(
+        mat,
+        aspect="auto",
+        origin="lower",          # kp が下から上に大きくなる
+        cmap="RdYlGn_r",         # 赤=R高（危険）、緑=R低（安全）
+        vmin=0, vmax=2,
+        interpolation="nearest", # セル境界をくっきり表示
+    )
+    plt.colorbar(im, ax=ax, label="R 値")
+ 
+    # R=1 等高線（白破線）
+    if not np.all(np.isnan(mat)):
+        try:
+            cs = ax.contour(mat, levels=[1.0],
+                            colors=["white"], linewidths=2.0, linestyles="--")
+            ax.clabel(cs, fmt="R=1", fontsize=9, colors="white")
+        except Exception:
+            pass
+ 
+    # 軸ラベル（多すぎる場合は間引き）
+    t_step  = max(1, len(all_t)  // 10)
+    kp_step = max(1, len(all_kp) // 10)
+    ax.set_xticks(range(0, len(all_t),  t_step))
+    ax.set_xticklabels(
+        [f"{int(all_t[i] // 60)}分" for i in range(0, len(all_t), t_step)],
+        rotation=45, fontsize=9,
+    )
+    ax.set_yticks(range(0, len(all_kp), kp_step))
+    ax.set_yticklabels(
+        [f"{all_kp[i]}" for i in range(0, len(all_kp), kp_step)],
+        fontsize=9,
+    )
+    ax.set_xlabel("時刻", fontsize=12)
+    ax.set_ylabel("キロポスト (m)", fontsize=12)
+ 
+    # R>1 セルにR値の数値をアノテーション
+    for i in range(mat.shape[0]):
+        for j in range(mat.shape[1]):
+            if not np.isnan(mat[i, j]) and mat[i, j] > 1.0:
+                ax.text(j, i, f"{mat[i, j]:.1f}", ha="center", va="center",
+                        fontsize=7, color="white", fontweight="bold")
+ 
+    plt.tight_layout()
+    out = OUTPUT_DIR / "r_heatmap.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.show()
+    print(f"時空間ヒートマップ保存: {out}")
+ 
+ 
 
 # ════════════════════════════════════════════════════════
 # 8. サマリーレポート
@@ -752,6 +849,214 @@ def plot_r_spatiotemporal(
           .to_string(index=False))
  
     return agg
+
+
+ 
+# ════════════════════════════════════════════════════════
+# 12. 交通密度の計算 と R値との関係分析
+# ════════════════════════════════════════════════════════
+def calc_density_r(
+    df:           pd.DataFrame,
+    valid:        pd.DataFrame,
+    time_bin_min: float = 5.0,   # 時間ビン幅（分）
+    kp_bin_m:     float = 100.0, # キロポストビン幅（m）
+    min_events:   int   = 2,     # 信頼性確保のため必要な急ブレーキ件数の下限
+):
+    """
+    各（時間ビン × キロポストビン）セルの交通密度を df から計算し、
+    同セルの R 値（valid）とマージして関係を分析・可視化する。
+ 
+    【密度の定義】
+        交通密度 k [台/km] = セル内のユニーク車両数 / ビン幅 [km]
+ 
+        - df の各レコードは「ある車両がある時刻にある地点にいた」ことを示す
+        - 同じ (t_bin, kp_bin) セルに何台いたかをカウント → 密度に換算
+        - detected_flag==1 の実測値のみ使用
+ 
+    【R値との対応】
+        - valid は calc_r_value() が返す急ブレーキイベント単位のDF
+        - 同じ (t_bin, kp_bin) でグループ化して平均R値を計算
+        - 密度DFとマージして散布図を描画
+    """
+    from scipy import stats
+ 
+    time_bin_sec = time_bin_min * 60
+    kp_bin_km    = kp_bin_m / 1000.0   # m → km（密度の単位合わせ）
+ 
+    # ── 密度の計算（df から）────────────────────────────
+    det = df.copy()
+    det["t_bin"]  = (det["t_sec"]   // time_bin_sec * time_bin_sec).astype(int)
+    det["kp_bin"] = (det["kilopost"] // kp_bin_m    * kp_bin_m    ).astype(int)
+ 
+    # セルごとのユニーク車両数をカウント → 密度に換算
+    density_df = (
+        det.groupby(["t_bin", "kp_bin"])["vehicle_id"]
+        .nunique()
+        .reset_index()
+        .rename(columns={"vehicle_id": "n_vehicles"})
+    )
+    
+    density_df["density_veh_km"] = density_df["n_vehicles"] / kp_bin_km
+    flow_df = (
+        det.groupby(["t_bin", "kp_bin"])["vehicle_id"]
+        .count()   # 通過回数
+        .reset_index(name="n_pass")
+    )
+
+    flow_df["flow_veh_h"] = flow_df["n_pass"] * (3600 / time_bin_sec)
+    qk_df = pd.merge(density_df, flow_df, on=["t_bin", "kp_bin"], how="inner")
+    for kp in sorted(qk_df["kp_bin"].unique()):
+        print(f"=== kp_bin: {kp} ===")
+
+        # ── ① Fundamental Diagram ─────────────
+        fig, ax = plt.subplots(figsize=(6, 5))
+        graph_df = qk_df[qk_df["kp_bin"] == kp]
+        ax.scatter(
+            graph_df["density_veh_km"],
+            graph_df["flow_veh_h"],
+            alpha=0.6
+        )
+
+        ax.set_xlabel("密度 (veh/km)")
+        ax.set_ylabel("交通量 (veh/h)")
+        ax.set_title(f"Fundamental Diagram (kp={kp})")
+        ax.grid(alpha=0.3)
+
+        plt.tight_layout()
+        plt.show()
+
+
+        # ── ② 時系列 ─────────────────────────
+        fig, ax = plt.subplots(2, 1, figsize=(10, 5), sharex=True)
+
+        graph_df = graph_df.sort_values("t_bin")
+
+        # 密度
+        ax[0].plot(graph_df["t_bin"], graph_df["density_veh_km"])
+        ax[0].set_ylabel("密度 k (veh/km)")
+        ax[0].set_title(f"時系列 (kp={kp})")
+        ax[0].grid(alpha=0.3)
+
+        # 交通量
+        ax[1].plot(graph_df["t_bin"], graph_df["flow_veh_h"])
+        ax[1].set_ylabel("交通量 q (veh/h)")
+        ax[1].set_xlabel("時刻")
+        ax[1].grid(alpha=0.3)
+
+        plt.tight_layout()
+        plt.show()
+
+    # ── R値の集計（valid から）──────────────────────────
+    valid_cp = valid.copy()
+    valid_cp["t_bin"]  = (valid_cp["brake_t"]  // time_bin_sec * time_bin_sec).astype(int)
+    valid_cp["kp_bin"] = (valid_cp["brake_kp"] // kp_bin_m    * kp_bin_m    ).astype(int)
+ 
+    r_agg = (
+        valid_cp.groupby(["t_bin", "kp_bin"])
+        .agg(R_mean=("n_infected", "mean"), n_events=("n_infected", "count"))
+        .reset_index()
+    )
+ 
+    # ── マージ ───────────────────────────────────────────
+    merged = pd.merge(density_df, r_agg, on=["t_bin", "kp_bin"], how="inner")
+    merged = merged[merged["n_events"] >= min_events]   # 件数が少ないセルを除外
+ 
+    print(f"\n=== 密度 × R値 分析 ===")
+    print(f"  有効セル数（急ブレーキ件数 ≥ {min_events}） : {len(merged)}")
+    print(f"  密度範囲   : {merged['density_veh_km'].min():.1f} 〜 {merged['density_veh_km'].max():.1f} 台/km")
+    print(f"  R値範囲    : {merged['R_mean'].min():.2f} 〜 {merged['R_mean'].max():.2f}")
+ 
+    if len(merged) < 3:
+        print("  ⚠ セル数が少なすぎます。time_bin_min や kp_bin_m を大きくしてください。")
+        return merged
+ 
+    # ── 回帰分析 ─────────────────────────────────────────
+    slope, intercept, r_val, p_val, se = stats.linregress(
+        merged["density_veh_km"], merged["R_mean"]
+    )
+    print(f"\n  線形回帰: R = {slope:.4f} × density + {intercept:.4f}")
+    print(f"  相関係数 r = {r_val:.3f}  (p = {p_val:.4f})")
+    print(f"  → {'有意な正の相関（密度が高いほどR値が高い）' if slope > 0 and p_val < 0.05 else '有意な相関なし' if p_val >= 0.05 else '有意な負の相関'}")
+ 
+    # ── 可視化 ───────────────────────────────────────────
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig.suptitle(
+        f"交通密度 × R値の関係（{time_bin_min:.0f}分 × {kp_bin_m:.0f}m セル）",
+        fontsize=13,
+    )
+ 
+    # 12-A. 散布図 + 回帰直線
+    ax = axes[0]
+    sc = ax.scatter(
+        merged["density_veh_km"], merged["R_mean"],
+        c=merged["n_events"],     # 色 = 急ブレーキ件数（信頼度）
+        cmap="YlOrRd",
+        s=40, alpha=0.75, edgecolors="none",
+    )
+    plt.colorbar(sc, ax=ax, label="急ブレーキ件数（セル内）")
+ 
+    # 回帰直線
+    x_line = np.linspace(merged["density_veh_km"].min(),
+                         merged["density_veh_km"].max(), 100)
+    ax.plot(x_line, slope * x_line + intercept,
+            color="#D85A30", linewidth=2, label=f"回帰直線 (r={r_val:.2f}, p={p_val:.3f})")
+    ax.axhline(1.0, color="#639922", linewidth=1.5, linestyle=":",
+               label="R = 1 臨界点")
+ 
+    ax.set_xlabel("交通密度 (台/km)", fontsize=11)
+    ax.set_ylabel("R 値（平均伝播件数）", fontsize=11)
+    ax.set_title("密度 vs R値\n（色=急ブレーキ件数）", fontsize=11)
+    ax.legend(fontsize=8)
+    ax.grid(linewidth=0.3, alpha=0.4)
+ 
+    # 12-B. 密度をビン分けしてR値の箱ひげ図
+    ax = axes[1]
+    n_quantiles = min(5, len(merged) // 3)   # データ数に応じてビン数を調整
+    if n_quantiles >= 2:
+        merged["density_q"] = pd.qcut(
+            merged["density_veh_km"], q=n_quantiles,
+            labels=[f"Q{i+1}" for i in range(n_quantiles)],
+            duplicates="drop",
+        )
+        groups = [g["R_mean"].values for _, g in merged.groupby("density_q", observed=True)]
+        labels = [str(k) for k in merged.groupby("density_q", observed=True).groups.keys()]
+ 
+        bp = ax.boxplot(groups, patch_artist=True, labels=labels)
+        colors = plt.cm.YlOrRd(np.linspace(0.2, 0.8, len(groups)))
+        for patch, color in zip(bp["boxes"], colors):
+            patch.set_facecolor(color)
+        ax.axhline(1.0, color="#639922", linewidth=1.5, linestyle=":", label="R = 1 臨界点")
+        ax.set_xlabel("密度の分位数（低→高）", fontsize=11)
+        ax.set_ylabel("R 値", fontsize=11)
+        ax.set_title("密度分位別R値の分布\n（箱ひげ図）", fontsize=11)
+        ax.legend(fontsize=8)
+        ax.grid(axis="y", linewidth=0.3, alpha=0.4)
+ 
+    # 12-C. 密度 vs R値 の2次元ヒートマップ
+    ax = axes[2]
+    # 2次元ビニング（hexbin）
+    hb = ax.hexbin(
+        merged["density_veh_km"], merged["R_mean"],
+        gridsize=15, cmap="YlOrRd", mincnt=1,
+    )
+    plt.colorbar(hb, ax=ax, label="セル数")
+    ax.axhline(1.0, color="#639922", linewidth=1.5, linestyle=":",
+               label="R = 1 臨界点")
+    ax.set_xlabel("交通密度 (台/km)", fontsize=11)
+    ax.set_ylabel("R 値", fontsize=11)
+    ax.set_title("密度 vs R値 の頻度分布\n（hexbin）", fontsize=11)
+    ax.legend(fontsize=8)
+    ax.grid(linewidth=0.3, alpha=0.4)
+ 
+    plt.tight_layout()
+    out = OUTPUT_DIR / "density_r_relation.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.show()
+    print(f"\n密度×R値分析図保存: {out}")
+ 
+    merged.to_csv(OUTPUT_DIR / "density_r.csv", index=False, encoding="utf-8-sig")
+    print(f"密度×R値CSV保存: {OUTPUT_DIR / 'density_r.csv'}")
+    return merged
  
 
 # ════════════════════════════════════════════════════════
@@ -762,6 +1067,7 @@ def main():
 
     # 各処理をここで ON/OFF できる
     df_ori                       = load_and_preprocess()           # 1. 読み込み
+    # df = df_ori.copy()
     df =  df_ori.iloc[:len(df_ori)//20]
     # plot_time_space(df)                                        # 2. タイムスペース図
 
@@ -772,6 +1078,7 @@ def main():
     if not np.isnan(R):
         sensitivity_analysis(detected_only, brake_ev)         # 6. 感度分析
         kp_r = plot_r_value(R, valid)                         # 7. R値可視化
+        plot_r_heatmap(valid)
         save_summary(R, valid, results_df, kp_r)              # 8. サマリー
         R_GRID = scan_r1_boundary(detected_only, brake_ev)    # 9. 境界スキャン
         plot_r1_boundary(R_GRID)                              # 10. 境界可視化
