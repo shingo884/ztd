@@ -122,14 +122,9 @@ def load_and_preprocess() -> pd.DataFrame:
 # ════════════════════════════════════════════════════════
 def plot_time_space(df: pd.DataFrame):
     """車両軌跡をタイムスペース図（横軸=時刻、縦軸=キロポスト）で描画する。"""
-    fig, axes = plt.subplots(
-        1, 2, figsize=(16, 8),
-        gridspec_kw={"width_ratios": [3, 1]},
-        sharey=True,
-    )
-    fig.suptitle("ZTD タイムスペース図（塚本合流付近）", fontsize=14, y=1.01)
+    fig, ax = plt.subplots(figsize=(12, 8))
+    fig.suptitle("ZTD タイムスペース図（塚本合流付近）", fontsize=14)
 
-    ax = axes[0]
     cmap = cm.get_cmap("jet_r")
     norm = mcolors.Normalize(vmin=V_MIN, vmax=V_MAX)
     lane_styles = {1: "-", 2: "--", 3: ":"}
@@ -137,8 +132,10 @@ def plot_time_space(df: pd.DataFrame):
     for vid, grp in tqdm(df.groupby("vehicle_id"), desc="軌跡描画"):
         detected = grp[grp["detected_flag"] == 1]
         interp   = grp[grp["detected_flag"] == 0]
+
         if len(detected) < 2:
             continue
+
         for i in range(len(detected) - 1):
             r0, r1 = detected.iloc[i], detected.iloc[i + 1]
             ax.plot(
@@ -149,36 +146,42 @@ def plot_time_space(df: pd.DataFrame):
                 linestyle=lane_styles.get(int(r0["traffic_lane"]), "-"),
                 alpha=0.7,
             )
+
         if len(interp) >= 2:
             ax.plot(interp["t_sec"], interp["kilopost"],
                     color="gray", linewidth=0.4, alpha=0.3, linestyle=":")
 
-    ax.set_xlabel("時刻 (s)", fontsize=12)
-    ax.set_ylabel("キロポスト (m)", fontsize=12)
+    ax.set_xlabel("時刻 (s)")
+    ax.set_ylabel("キロポスト (m)")
     ax.set_ylim(df["kilopost"].min(), df["kilopost"].max())
-    ax.set_title("車両軌跡（時間→横）\n色: 速度、線種: 車線（実線=走行/破線=追越/点線=入口）", fontsize=10)
+    ax.set_title("車両軌跡（時間→横）")
     ax.grid(linewidth=0.3, alpha=0.4)
+
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    plt.colorbar(sm, ax=ax, label="速度 (km/h)", fraction=0.03, pad=0.01)
-
-    ax2 = axes[1]
-    det = df[df["detected_flag"] == 1]
-    ax2.hist(det["velocity"], bins=40, orientation="horizontal",
-             color="#378ADD", alpha=0.7, edgecolor="white", linewidth=0.3)
-    ax2.set_xlabel("車両数", fontsize=11)
-    ax2.set_title("速度分布\n(detected only)", fontsize=10)
-    ax2.axhline(det["velocity"].mean(), color="#D85A30", linewidth=1.2,
-                linestyle="--", label=f"平均 {det['velocity'].mean():.1f} km/h")
-    ax2.legend(fontsize=9)
-    ax2.grid(axis="x", linewidth=0.3, alpha=0.4)
+    plt.colorbar(sm, ax=ax, label="速度 (km/h)")
 
     plt.tight_layout()
-    out = OUTPUT_DIR / "time_space_diagram.png"
-    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.savefig(OUTPUT_DIR / "time_space_diagram.png", dpi=150)
     plt.show()
-    print(f"保存: {out}")
+    
+    fig, ax = plt.subplots(figsize=(6, 8))
 
+    det = df[df["detected_flag"] == 1]
+
+    ax.hist(det["velocity"], bins=40, orientation="horizontal",
+            color="#378ADD", alpha=0.7, edgecolor="white", linewidth=0.3)
+
+    ax.set_xlabel("車両数")
+    ax.set_ylabel("速度 (km/h)")
+    ax.set_title("速度分布（detected only）")
+
+    ax.legend()
+    ax.grid(axis="x", linewidth=0.3, alpha=0.4)
+
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "velocity_histogram.png", dpi=150)
+    plt.show()
 
 # ════════════════════════════════════════════════════════
 # 3. 急ブレーキ検出（前処理）
